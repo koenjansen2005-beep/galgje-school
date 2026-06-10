@@ -1,0 +1,177 @@
+ui <- fluidPage(
+  titlePanel("Galgje"),
+  
+  # bovenste rij
+  fluidRow(
+    column(3, numericInput("woordlengte", "Woordlengte:", value = 5, min = 3, max = 14)),
+    column(10, actionButton("nieuw_spel", "Nieuw spel"))
+  ),
+  
+  textOutput("debug_woord"),
+  h2(textOutput("gewonnen_tekst"), style = "color: lightgreen;"),
+  h2(textOutput("verloren_tekst"), style = "color: red;"),
+  
+  br(),
+  
+  # galg + woord + toetsenbord in zelfde container
+  div(style = "max-width: 480px; margin: 0 auto;",
+      
+      # galg vierkant zodat proportie klopt
+      plotOutput("galg", width = "480px", height = "480px"),
+      
+      # woord onder galg
+      div(style = "text-align: center; font-size: 28px; letter-spacing: 8px; margin: 10px 0;",
+          h3(textOutput("patroon_tekst"))
+      ),
+      
+      # toetsenbord
+      uiOutput("toetsenbord")
+  )
+)
+
+server <- function(input, output, session) {
+  
+  woord        <- reactiveVal("")
+  patroon      <- reactiveVal(c())
+  fout_letters <- reactiveVal(c())
+  fouten       <- reactiveVal(0)
+  spel_klaar   <- reactiveVal(FALSE)
+  laatste_gok  <- reactiveVal(NULL)
+  
+  alle_letters <- c("q","w","e","r","t","y","u","i","o","p",
+                    "a","s","d","f","g","h","j","k","l",
+                    "z","x","c","v","b","n","m")
+  
+  observeEvent(input$nieuw_spel, {
+    w <- kies(input$woordlengte)
+    woord(w)
+    patroon(maak_patroon(w))
+    fout_letters(c())
+    fouten(0)
+    spel_klaar(FALSE)
+    laatste_gok(NULL)
+  })
+  
+  raad_letter <- function(letter) {
+    if (woord() == "") return()
+    if (spel_klaar()) return()
+    if (letter %in% fout_letters()) return()
+    if (letter %in% patroon()) return()
+    
+    posities <- check_letter(letter, woord())
+    
+    if (length(posities) > 0) {
+      patroon(update_patroon(patroon(), posities, letter))
+      laatste_gok("goed")
+    } else {
+      fouten(fouten() + 1)
+      fout_letters(c(fout_letters(), letter))
+      laatste_gok("fout")
+    }
+    
+    if (is_gewonnen(patroon())) spel_klaar(TRUE)
+    else if (fouten() >= 6)     spel_klaar(TRUE)
+  }
+  
+  lapply(alle_letters, function(lt) {
+    observeEvent(input[[paste0("knop_", lt)]], {
+      raad_letter(lt)
+    }, ignoreInit = TRUE)
+  })
+  
+  output$patroon_tekst <- renderText({
+    if (woord() == "") "Druk op Nieuw spel!"
+    else toon_patroon(patroon())
+  })
+  
+  output$debug_woord <- renderText({
+    if (woord() == "") return("")
+    paste("Woord (test):", woord())
+  })
+  
+  output$gewonnen_tekst <- renderText({
+    if (spel_klaar() && is_gewonnen(patroon())) "Gefeliciteerd! Je hebt gewonnen!"
+    else ""
+  })
+  
+  output$verloren_tekst <- renderText({
+    if (spel_klaar() && !is_gewonnen(patroon())) paste("Helaas! Het woord was:", woord())
+    else ""
+  })
+  
+  output$toetsenbord <- renderUI({
+    
+    rij1 <- c("q","w","e","r","t","y","u","i","o","p")
+    rij2 <- c("a","s","d","f","g","h","j","k","l")
+    rij3 <- c("z","x","c","v","b","n","m")
+    
+    maak_rij <- function(letters) {
+      knoppen <- lapply(letters, function(lt) {
+        if (lt %in% fout_letters()) {
+          kleur <- "background-color: red; color: white;"
+        } else if (lt %in% patroon()) {
+          kleur <- "background-color: lightgreen; color: black;"
+        } else {
+          kleur <- "background-color: lightgrey; color: black;"
+        }
+        actionButton(
+          inputId = paste0("knop_", lt),
+          label   = toupper(lt),
+          # kleinere knoppen zodat P naast O past
+          style   = paste("width: 38px; height: 38px; margin: 2px; padding: 0; font-weight: bold;", kleur)
+        )
+      })
+      div(style = "text-align: center; margin-bottom: 4px;",
+          do.call(tagList, knoppen))
+    }
+    
+    tagList(
+      maak_rij(rij1),
+      maak_rij(rij2),
+      maak_rij(rij3)
+    )
+  })
+  
+  output$galg <- renderPlot({
+    
+    gok <- laatste_gok()
+    kleur <- if (is.null(gok)) "black" else if (gok == "goed") "lightgreen" else "red"
+    
+    # vierkant plot zodat galg niet uitrekt
+    par(mar = c(0, 0, 0, 0))
+    plot(0, 0, type = "n",
+         xlim = c(0, 10), ylim = c(0, 10),
+         axes = FALSE, xlab = "", ylab = "",
+         asp = 1)
+    
+    n <- fouten()
+    
+    lines(c(1, 9),   c(1, 1),     lwd = 4, col = kleur)
+    lines(c(2, 2),   c(1, 9.5),   lwd = 4, col = kleur)
+    lines(c(2, 6),   c(9.5, 9.5), lwd = 4, col = kleur)
+    lines(c(6, 6),   c(9.5, 8.8), lwd = 2, col = kleur)
+    lines(c(2, 4),   c(3, 1),     lwd = 3, col = kleur)
+    lines(c(2, 4),   c(7.5, 9.5), lwd = 3, col = kleur)
+    
+    if (n >= 1) {
+      t <- seq(0, 2*pi, length.out = 100)
+      lines(6 + 0.65*cos(t), 8.1 + 0.65*sin(t), lwd = 2, col = kleur)
+    }
+    if (n >= 2) lines(c(6, 6),   c(7.45, 5.8), lwd = 2, col = kleur)
+    if (n >= 3) lines(c(6, 4.4), c(7.0,  5.8), lwd = 2, col = kleur)
+    if (n >= 4) lines(c(6, 7.6), c(7.0,  5.8), lwd = 2, col = kleur)
+    if (n >= 5) lines(c(6, 4.6), c(5.8,  4.2), lwd = 2, col = kleur)
+    if (n >= 6) lines(c(6, 7.4), c(5.8,  4.2), lwd = 2, col = kleur)
+    
+    if (spel_klaar()) {
+      if (is_gewonnen(patroon())) {
+        text(5, 0.5, "Gewonnen!", col = "lightgreen", cex = 1.8, font = 2)
+      } else {
+        text(5, 0.5, "Verloren!", col = "red", cex = 1.8, font = 2)
+      }
+    }
+    
+  }, bg = "white", width = 480, height = 480)
+}
+
+shinyApp(ui, server)
