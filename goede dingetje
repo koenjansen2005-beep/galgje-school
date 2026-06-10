@@ -1,0 +1,208 @@
+# --- WAT JE ZIET ---
+ui <- fluidPage(
+  titlePanel("Galgje"),
+  
+  numericInput("woordlengte", "Woordlengte:", value = 5, min = 3, max = 14),
+  actionButton("nieuw_spel", "Nieuw spel"),
+  
+  br(), br(),
+  
+  h3(textOutput("patroon_tekst")),
+  textOutput("fouten_tekst"),
+  textOutput("debug_woord"),
+  
+  # einde melding — alleen zichtbaar als spel klaar is
+  h2(textOutput("gewonnen_tekst"), style = "color: lightgreen;"),
+  h2(textOutput("verloren_tekst"), style = "color: red;"),
+  
+  plotOutput("galg", width = "200px", height = "200px"),
+  
+  br(), br(), br(),br(),br(),br(),
+  
+  
+  textInput("letter_input", "Raad een letter:"),
+  actionButton("raad", "Raad!"),
+
+
+# toetsenbord
+  uiOutput("toetsenbord")
+)
+
+
+# --- WAT ER GEBEURT ---
+server <- function(input, output, session) {
+  
+  # het spel onthoudt deze 4 dingen
+  woord        <- reactiveVal("")
+  patroon      <- reactiveVal(c())
+  fout_letters <- reactiveVal(c())
+  fouten       <- reactiveVal(0)
+  spel_klaar   <- reactiveVal(FALSE)
+  
+  # knop geklikt = nieuw spel
+  observeEvent(input$nieuw_spel, {
+    w <- kies(input$woordlengte)
+    woord(w)
+    patroon(maak_patroon(w))
+    fout_letters(c())
+    fouten(0)
+    spel_klaar(FALSE)
+  })
+  
+  # functie die een letter verwerkt — gebruikt door toetsenbord
+  raad_letter <- function(letter) {
+    if (woord() == "") return()
+    if (spel_klaar()) return()
+    if (letter %in% fout_letters()) return()
+    if (letter %in% patroon()) return()
+    
+    posities <- check_letter(letter, woord())
+    
+    if (length(posities) > 0) {
+      patroon(update_patroon(patroon(), posities, letter))
+    } else {
+      fouten(fouten() + 1)
+      fout_letters(c(fout_letters(), letter))
+    }
+    
+    if (is_gewonnen(patroon())) spel_klaar(TRUE)
+    else if (fouten() >= 6)     spel_klaar(TRUE)
+  }
+  
+  # luister naar elke letterknop
+  alle_letters <- c("a","b","c","d","e","f","g","h","i","j","k","l","m",
+                    "n","o","p","q","r","s","t","u","v","w","x","y","z")
+  
+  lapply(alle_letters, function(lt) {
+    observeEvent(input[[paste0("knop_", lt)]], {
+      raad_letter(lt)
+    }, ignoreInit = TRUE)
+  })
+  
+  # raad knop geklikt = letter controleren
+  observeEvent(input$raad, {
+    letter <- tolower(input$letter_input)
+    
+    # alleen doorgaan als er 1 letter ingetypt is
+    if (nchar(letter) != 1) return()
+    
+    # alleen doorgaan als het spel bezig is
+    if (woord() == "") return()
+    
+    # stop als spel al klaar is
+    if (spel_klaar()) return()
+    
+    posities <- check_letter(letter, woord())
+    
+    if (length(posities) > 0) {
+      # goede gok: vul de letter in het patroon
+      patroon(update_patroon(patroon(), posities, letter))
+    } else {
+      # foute gok: foutenteller omhoog
+      fouten(fouten() + 1)
+      fout_letters(c(fout_letters(), letter))
+    } 
+    updateTextInput(session, "letter_input", value = "")
+   
+     # check of gewonnen of verloren
+    if (is_gewonnen(patroon())) {
+      spel_klaar(TRUE)
+    } else if (fouten() >= 6) {
+      spel_klaar(TRUE)
+    }
+  })
+  
+  # toon het patroon: _ a _ _ _
+  output$patroon_tekst <- renderText({
+    if (woord() == "") "Druk op Nieuw spel!"
+    else toon_patroon(patroon())
+  })
+  
+  # toon de fouten
+  output$fouten_tekst <- renderText({
+    if (woord() == "") return("")
+    paste("Fouten:", fouten(), "/ 6  |  Fout:", 
+          if (length(fout_letters()) == 0) "-"
+          else paste(fout_letters(), collapse = ", "))
+  })
+  
+  # tijdelijk: laat het woord zien om te testen
+  output$debug_woord <- renderText({
+    if (woord() == "") return("")
+    paste("Woord (test):", woord())
+  })
+  
+  # toon winnaar of verliezer bericht
+  output$gewonnen_tekst <- renderText({
+    if (spel_klaar() && is_gewonnen(patroon())) "Gefeliciteerd! Je hebt gewonnen!"
+    else ""
+  })
+  
+  output$verloren_tekst <- renderText({
+    if (spel_klaar() && !is_gewonnen(patroon())) paste("Helaas! Het woord was:", woord())
+    else ""
+  })
+  
+  output$toetsenbord <- renderUI({
+    
+    knoppen <- lapply(alle_letters, function(lt) {
+      
+      if (lt %in% fout_letters()) {
+        kleur <- "background-color: red; color: white;"
+      } else if (lt %in% patroon()) {
+        kleur <- "background-color: lightgreen; color: white;"
+      } else {
+        kleur <- "background-color: lightgrey; color: black;"
+      }
+      
+      actionButton(
+        inputId = paste0("knop_", lt),
+        label   = toupper(lt),
+        style   = paste("width: 40px; height: 40px; margin: 2px; font-weight: bold;", kleur)
+      )
+    })
+    
+    do.call(tagList, knoppen)
+  })
+  
+  output$galg <- renderPlot({
+    
+    plot(0, 0, type = "n",
+         xlim = c(0, 10), ylim = c(0, 10),
+         axes = FALSE, xlab = "", ylab = "")
+    
+    n <- fouten()
+    
+    # galg stok
+    lines(c(1, 9), c(1, 1),   lwd = 4)   # grond
+    lines(c(2, 2), c(1, 9.5), lwd = 4)   # paal
+    lines(c(2, 6), c(9.5, 9.5), lwd = 4) # dak
+    lines(c(6, 6), c(9.5, 8.8), lwd = 2) # touw
+    lines(c(2, 4),   c(3, 1),     lwd = 3)   # steun grond/paal
+    lines(c(2, 4),   c(7.5, 9.5),   lwd = 3)   # steun paal/dak
+    
+    
+    # poppetje — hoofd middelpunt op (6, 8.1)
+    if (n >= 1) {
+      t <- seq(0, 2*pi, length.out = 100)
+      lines(6 + 0.65*cos(t), 8.1 + 0.65*sin(t), lwd = 2)
+    }                                                   # hoofd
+    if (n >= 2) lines(c(6, 6),   c(7.45, 5.8), lwd = 2) # romp
+    if (n >= 3) lines(c(6, 4.4), c(7.0,  5.8), lwd = 2) # linkerarm
+    if (n >= 4) lines(c(6, 7.6), c(7.0,  5.8), lwd = 2) # rechterarm
+    if (n >= 5) lines(c(6, 4.6), c(5.8,  4.2), lwd = 2) # linkerbeen
+    if (n >= 6) lines(c(6, 7.4), c(5.8,  4.2), lwd = 2) # rechterbeen
+    
+    # winnaar of verliezer tekst in de plot
+    if (spel_klaar()) {
+      if (is_gewonnen(patroon())) {
+        text(5, 0.3, "Gewonnen!", col = "lightgreen", cex = 1.8, font = 2)
+      } else {
+        text(5, 0.3, "Verloren!", col = "red", cex = 1.8, font = 2)
+      }
+    }
+  }, bg = "white", width = 250, height = 300)
+  
+}
+
+shinyApp(ui, server)
